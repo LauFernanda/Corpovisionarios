@@ -1,0 +1,235 @@
+---
+title: "ECC Protocolo para fundir bases de datos nuevas"
+author: "Laura Fernanda Merchán Rincón"
+date: "26 de diciembre de 2016"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 5
+  html_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Paso a paso
+###1. correr la función diccionarioInconsistencias.R
+```{r tidy=TRUE,eval=FALSE}
+diccionarioInconsistencias<-function(nacional,paraFundir, nombreCiudad){
+  #Carga paquetes necesarios
+  library(sjmisc)
+  library(tidyr)
+  library(xlsx)
+  
+  #lee base nacional y construye su diccionario
+  nacional<-read_spss(nacional,enc = "UTF-8",attach.var.labels=TRUE)
+  nombresNacional<-names(nacional)
+  labelsNacional<-get_label(nacional)
+  diccionarioNacional<-as.data.frame(cbind(nombresNacional,labelsNacional))
+  
+  #lee base para fundir  y construye su diccionario
+  paraFundir<-read_spss(paraFundir,enc = "UTF-8",attach.var.labels=TRUE)
+  nombresParaFundir<-names(paraFundir)
+  labelsParaFundir<-get_label(paraFundir)
+  diccionarioParaFundir<-as.data.frame(cbind(nombresParaFundir,labelsParaFundir))
+  
+  #Identifica inconsistencias en los nombres de variables de las dos bases
+  eliminar<-setdiff(names(paraFundir),names(nacional))
+  crear<-setdiff(names(nacional),names(paraFundir))
+  inconsistencias<-as.data.frame(cbind(eliminar,crear))
+  inconsistencias<-gather(inconsistencias,"acciones","variable",1:2)
+  inconsistencias<-unique(inconsistencias)
+  ##diccionario completo
+  ##Guardar en excel
+  wb <- createWorkbook()
+  nameSheet <- paste ("diccionario", nombreCiudad)
+  hoja     <- createSheet(wb, sheetName = nameSheet)
+  addDataFrame(diccionarioParaFundir, sheet = hoja,
+               startRow = 1, startColumn = 1,
+               row.names = FALSE, col.names = TRUE)
+  
+  nameSheet <- "diccionarioNacional"
+  hoja     <- createSheet(wb, sheetName = nameSheet)
+  addDataFrame(diccionarioNacional, sheet = hoja,
+               startRow = 1, startColumn = 1,
+               row.names = FALSE, col.names = TRUE)
+  
+  nameSheet <- "inconsistencias"
+  hoja     <- createSheet(wb, sheetName = nameSheet)
+  addDataFrame(inconsistencias, sheet = hoja,
+               startRow = 1, startColumn = 1,
+               row.names = FALSE, col.names = TRUE)
+  
+  file<- paste ("diccionario", nombreCiudad,".xlsx",sep="")
+  saveWorkbook(wb, file = file)
+}
+
+```
+*Ejemplo* 
+```{r tidy=TRUE, eval=FALSE}
+ diccionarioInconsistencias(nacional="./2016-09-23ECC_nacional_2008_2016.sav",paraFundir ="2016.08.12BASE_TOTAL_BOGOTA_2016.sav", nombreCiudad="Bogotá 2016")
+```
+ 
+###2. revisar el archivo generado por la función anterior y verificar que las variables a eliminar realmente se deben eliminar  
+###3. correr la función fundirECC.R
+```{r tidy=TRUE,eval=FALSE}
+fundirECC<-function(nacional,paraFundir,inconsistencias, ciudad){
+  #Carga de paquetes necesarios 
+  library(sjmisc)
+  library(xlsx)
+  library(dplyr)
+  
+  #Lee los archivos necesarios  
+  if(grep(".Rda",nacional)==1){
+    x<-(load(nacional))
+    nacional<-get(x)
+    rm(x)
+    } else if(grep(".csv",nacional)==1){
+    nacional<-read.csv2(nacional)
+    } else if (grep(".sav",nacional)==1){
+    nacional<-to_label(read_spss(nacional,enc="UTF-8",attach.var.labels=TRUE))
+    } else{print("La base de datos está en un formato no permitido")}
+
+  paraFundir<-read_spss(paraFundir,enc = "UTF-8",attach.var.labels=TRUE)
+  inconsistencias<-read.xlsx(inconsistencias,3)
+  
+  #Eliminar módulo adicional, identificación y preguntas otro, cuál identificadas en el documento de inconsistencias
+  eliminar<-select(filter(inconsistencias,acciones=="eliminar"),variable)
+  eliminar<-as.character(eliminar[,1])
+  diferencia<-setdiff(eliminar,names(paraFundir))
+  
+  for (i in seq(diferencia)){
+    variable<-which(eliminar==diferencia[i])
+    #variable<-as.symbol(quitar[i])
+    eliminar<-eliminar[-variable]
+  }
+  
+  for (i in seq(eliminar)){
+    variable<-which(names(paraFundir)==eliminar[i])
+    #variable<-as.symbol(quitar[i])
+    paraFundir<-paraFundir[,-variable]
+  }
+  
+  variablesParaFundirNoNacional<-sort(setdiff(names(paraFundir),names(nacional)))
+  variablesParaCrear<-sort(setdiff(names(nacional),names(paraFundir)))
+  
+  #Crear las variables que siempre se crean (sociodemográficas recodificadas)
+  
+  paraFundir$Joven_Adulto<-as.numeric(cut(paraFundir$Annos,breaks=c(-Inf, 25,Inf)))
+  paraFundir$Joven_Adulto<-set_labels(paraFundir$Joven_Adulto,c("Jovenes (14-25)", "Adultos (26 o más)"))  
+  
+  paraFundir$Edad_cat<-as.numeric(cut(paraFundir$Annos,breaks=c(-Inf, 17,25,35,45,55,Inf)))
+  paraFundir$Edad_cat<-set_labels(paraFundir$Edad_cat,c("Menor a 18", "18-25","26-35","36-45","46-55","Mayor a 55"))  
+  
+  paraFundir$Estra_cat<-as.numeric(cut(paraFundir$Estra,breaks=c(-Inf, 2,4,Inf)))
+  paraFundir$Estra_cat<-set_labels(paraFundir$Estra_cat,c("Bajo", "Medio", "Alto")) 
+  if("Manzana" %in% names(paraFundir)){
+  paraFundir$Manzana<-as.character(paraFundir$Manzana)                              
+  }
+  
+#Labels completos a las numéricas en paraFundir (Mientras se modifica el diccionario)
+attributes(paraFundir$satf_vida)<-NULL
+attr(paraFundir$satf_vida,"label")<-"Qué tan satisfecho se siente usted con su vida considerada en conjunto"
+etiquetas<-c(1,2,3,4,5,6,7,8,9,10)
+names(etiquetas)<-c("Muy insatisfecho","2","3","4","5","6","7","8","9","Muy satisfecho")
+attr(paraFundir$satf_vida,"labels")<-etiquetas
+
+attributes(paraFundir$P_seg_cal)<-NULL
+attr(paraFundir$P_seg_cal,"label")<-"¿De 1 a 5, qué calificación le da a esta ciudad en seguridad?"
+etiquetas<-c(1,2,3,4,5)
+names(etiquetas)<-c("Muy insegura","2","3","4","Muy segura")
+attr(paraFundir$P_seg_cal,"labels")<-etiquetas
+
+attributes(paraFundir$Imp_apub)<-NULL
+attr(paraFundir$Imp_apub,"label")<-"Qué tan importantes son los asuntos públicos en su vida"
+etiquetas<-c(1,2,3,4,5,6,7,8,9,10)
+names(etiquetas)<-c("Poco importantes","2","3","4","5","6","7","8","9","Muy importantes")
+attr(paraFundir$Imp_apub,"labels")<-etiquetas
+
+##Crea la variable de ciudad
+    cuantasCiudades<-length(attr(nacional$medicion,"labels"))
+    paraFundir$medicion<-cuantasCiudades+1
+    etiquetas<-cuantasCiudades+1
+    names(etiquetas)<-ciudad
+    attr(paraFundir$medicion,"labels")<-etiquetas
+
+    #Modifica la variables Ciudad en la base consolidada para incluir la ciudad nueva
+    ciudadesViejas<-names(attr(nacional$medicion,"labels"))
+    attr(nacional$medicion,"labels")<-c(attr(nacional$medicion,"labels"),cuantasCiudades+1)
+    names(attr(nacional$medicion,"labels")) = c(ciudadesViejas,ciudad)
+
+  #Imprime las bases en el global Environment
+  assign('paraFundir',paraFundir,envir=.GlobalEnv)
+  assign('nacional', nacional,envir=.GlobalEnv)
+}
+```
+*Ejemplo* 
+```{r tidy=TRUE,eval=FALSE }
+fundirECC(nacional="./2016-09-23ECC_nacional_2008_2016.sav",paraFundir="2016.08.12 BASE_TOTAL_BOGOTA_2016.sav", inconsistencias="diccionarioBogotá 20161.xlsx", ciudad="Bogotá 2016")
+```
+###4. verificar con las bases que se imprimen en el ambiente global de acuerdo a la siguiente estructura
+```{r tidy=TRUE, eval=FALSE}
+#Inconsistencias en los nombres de las variables
+#Renombrar variables. Incluir una línea con esta estructura por variable a renombrar.
+diferenciasNombres<-setdiff(names(nacional),names(paraFundir))
+diferenciasNombres1<-setdiff(names(paraFundir),names(nacional))
+
+names(paraFundir)[names(paraFundir)=="nombreViejo"]<-"nombreNuevo"
+#Borrar variables
+paraFundir<-select(paraFundir, "nombres variables a cambiar separados por comas")
+#Crear Variables
+paraFundir$NOMBREVARIABLE<-NA
+diferenciasNombres<-setdiff(names(nacional),names(paraFundir))
+diferenciasNombres1<-setdiff(names(paraFundir),names(nacional))
+
+# Modificaciones a variable de movilidad
+diferenciasMov<-setdiff(names(attr(paraFundir$Mov,"labels")),names(attr(nacional$Mov,"labels")))
+diferenciasMov
+table(paraFundir$Mov) 
+
+#Incluir una línea con esta estructura por código a modificar.
+#Comentar las razones de las modificaciones
+paraFundir$Mov[paraFundir$Mov== codigoViejo]<-codigoNuevo
+#Verificar que la tabla se modificó adecuadamente  
+table(paraFundir$Mov)
+
+#Recodificación labels Mov
+paraFundir$Mov<-set_labels(paraFundir$Mov,c("A pie", "Bus,buseta,colectivo","Taxi","Motocicleta","Bicicleta","Sistema de transporte masivo","Moto-taxi","Automóvil particular","Otros"))  
+diferenciasMov<-setdiff(names(attr(paraFundir$Mov,"labels")),names(attr(nacional$Mov,"labels")))
+
+#Ordenar de acuerdo a nacional
+paraFundir<- paraFundir[names(nacional)]
+
+#UNIR
+unida<-rbind(nacional,paraFundir)
+
+#Guardar Archivo
+fecha<-Sys.Date()
+ciudad<-names(attr(paraFundir$Ciudad,"labels"))
+file<-paste("./",fecha,"ECC_nacional_desde_2008.Rda",sep="")
+fileCiudad<-paste("./",ciudad,".Rda",sep="")
+save(unida,file= file)
+save(paraFundir,file=fileCiudad)
+
+#Exportar SPSS
+file<-paste("./",fecha,"ECC_nacional_desde_2008.sav",sep="")
+write_spss(unida,file , enc.to.utf8 = TRUE)
+fileCiudad<-paste("./",fecha,ciudad,".sav",sep="")
+write_spss(paraFundir,fileCiudad, enc.to.utf8 = TRUE)
+
+#Exportar .csv
+file<-paste("./",fecha,"ECC_nacional_desde_2008.csv",sep="")
+unidaL<-to_label(unida)
+write.csv2(unidaL,file, fileEncoding = "UTF-8")
+
+fileCiudad<-paste("./",fecha,ciudad,".csv",sep="")
+paraFundirL<-to_label(paraFundir)
+write.csv2(paraFundirL,fileCiudad, fileEncoding = "UTF-8")
+
+ciudades<-attr(unida$Ciudad,"labels")
+write.csv(ciudades,file="./ciudades.csv")
+
+```
+###5. guardar el archivo cambiosAdicionalesParaFundir[Ciudad].R
